@@ -115,7 +115,11 @@ export type Database = {
       orders: {
         Row: {
           created_at: string
+          fiscal_name: string | null
           id: string
+          invoice_auth: string | null
+          invoice_number: string | null
+          nit: string | null
           shipping_address: string | null
           status: Database["public"]["Enums"]["order_status"]
           total: number
@@ -123,7 +127,11 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          fiscal_name?: string | null
           id?: string
+          invoice_auth?: string | null
+          invoice_number?: string | null
+          nit?: string | null
           shipping_address?: string | null
           status?: Database["public"]["Enums"]["order_status"]
           total: number
@@ -131,7 +139,11 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          fiscal_name?: string | null
           id?: string
+          invoice_auth?: string | null
+          invoice_number?: string | null
+          nit?: string | null
           shipping_address?: string | null
           status?: Database["public"]["Enums"]["order_status"]
           total?: number
@@ -192,20 +204,26 @@ export type Database = {
       profiles: {
         Row: {
           created_at: string
+          email: string | null
           full_name: string | null
           id: string
+          is_active: boolean
           updated_at: string
         }
         Insert: {
           created_at?: string
+          email?: string | null
           full_name?: string | null
           id: string
+          is_active?: boolean
           updated_at?: string
         }
         Update: {
           created_at?: string
+          email?: string | null
           full_name?: string | null
           id?: string
+          is_active?: boolean
           updated_at?: string
         }
         Relationships: []
@@ -236,6 +254,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      checkout_order: {
+        Args: {
+          p_user_id: string
+          p_items: Json
+          p_total: number
+          p_shipping_address: string
+          p_nit: string
+          p_fiscal_name: string
+          p_invoice_number: string
+        }
+        Returns: string
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
