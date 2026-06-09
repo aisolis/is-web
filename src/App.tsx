@@ -6,6 +6,7 @@ import Cart from "@/pages/Cart";
 import Orders from "@/pages/Orders";
 import Admin from "@/pages/Admin";
 import ProductDetail from "@/pages/ProductDetail";
+import ThankYouPage from "@/pages/ThankYouPage";
 
 function NotFound() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/products/:slug" element={<ProductDetail />} />
+          <Route path="/thank-you/:orderId" element={<ThankYouPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

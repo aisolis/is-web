@@ -12,9 +12,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 function slugify(s: string) {
-  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 type ProductForm = {
@@ -45,10 +46,12 @@ export default function AdminPage() {
           <TabsTrigger value="products">Productos</TabsTrigger>
           <TabsTrigger value="categories">Categorías</TabsTrigger>
           <TabsTrigger value="orders">Pedidos</TabsTrigger>
+          <TabsTrigger value="users">Usuarios</TabsTrigger>
         </TabsList>
         <TabsContent value="products" className="mt-6"><ProductsAdmin /></TabsContent>
         <TabsContent value="categories" className="mt-6"><CategoriesAdmin /></TabsContent>
         <TabsContent value="orders" className="mt-6"><OrdersAdmin /></TabsContent>
+        <TabsContent value="users" className="mt-6"><UsersAdmin /></TabsContent>
       </Tabs>
     </div>
   );
@@ -207,6 +210,152 @@ function OrdersAdmin() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function UsersAdmin() {
+  const { user: currentUser } = useAuth();
+  const qc = useQueryClient();
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [form, setForm] = useState({ id: "", email: "", full_name: "", role: "user" as "admin" | "user" });
+
+  const { data: profiles } = useQuery({
+    queryKey: ["admin-profiles"],
+    queryFn: async () =>
+      (await supabase.from("profiles").select("id, email, full_name, is_active, created_at").eq("is_active", true).order("created_at", { ascending: false })).data ?? [],
+  });
+
+  const { data: roles } = useQuery({
+    queryKey: ["admin-user-roles"],
+    queryFn: async () => (await supabase.from("user_roles").select("user_id, role")).data ?? [],
+  });
+
+  const users = profiles?.map((p) => ({
+    ...p,
+    role: (roles?.find((r) => r.user_id === p.id)?.role ?? "user") as "admin" | "user",
+  }));
+
+  const saveUser = useMutation({
+    mutationFn: async () => {
+      const { error: pe } = await supabase.from("profiles").update({ full_name: form.full_name }).eq("id", form.id);
+      if (pe) throw pe;
+      await supabase.from("user_roles").delete().eq("user_id", form.id);
+      const { error: re } = await supabase.from("user_roles").insert({ user_id: form.id, role: form.role });
+      if (re) throw re;
+    },
+    onSuccess: () => {
+      toast.success("Usuario actualizado");
+      qc.invalidateQueries({ queryKey: ["admin-profiles"] });
+      qc.invalidateQueries({ queryKey: ["admin-user-roles"] });
+      setEditOpen(false);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const deactivateUser = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("profiles").update({ is_active: false }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Usuario desactivado");
+      qc.invalidateQueries({ queryKey: ["admin-profiles"] });
+      setDeleteId(null);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <div>
+      <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-secondary/50 text-left">
+            <tr>
+              <th className="p-3">Email</th>
+              <th className="p-3">Nombre</th>
+              <th className="p-3">Rol</th>
+              <th className="p-3">Registrado</th>
+              <th className="p-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {users?.map((u) => {
+              const isSelf = u.id === currentUser?.id;
+              return (
+                <tr key={u.id} className="border-t border-border">
+                  <td className="p-3 text-muted-foreground">{u.email ?? "—"}</td>
+                  <td className="p-3 font-medium">{u.full_name ?? "—"}</td>
+                  <td className="p-3">
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${u.role === "admin" ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground"}`}>
+                      {u.role}
+                    </span>
+                  </td>
+                  <td className="p-3 text-muted-foreground">{new Date(u.created_at).toLocaleDateString()}</td>
+                  <td className="p-3 text-right space-x-1">
+                    <Button
+                      size="icon" variant="ghost"
+                      disabled={isSelf}
+                      onClick={() => { setForm({ id: u.id, email: u.email ?? "", full_name: u.full_name ?? "", role: u.role }); setEditOpen(true); }}
+                    >
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon" variant="ghost" className="text-destructive"
+                      disabled={isSelf}
+                      onClick={() => setDeleteId(u.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Editar usuario</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Email</Label><Input value={form.email} disabled className="opacity-60" /></div>
+            <div><Label>Nombre completo</Label><Input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></div>
+            <div>
+              <Label>Rol</Label>
+              <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v as "admin" | "user" })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">user</SelectItem>
+                  <SelectItem value="admin">admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button className="w-full" disabled={saveUser.isPending} onClick={() => saveUser.mutate()}>Guardar</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleteId} onOpenChange={(o) => { if (!o) setDeleteId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Desactivar este usuario?</AlertDialogTitle>
+            <AlertDialogDescription>
+              El usuario perderá acceso a su cuenta. Esta acción se puede revertir desde la base de datos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteId && deactivateUser.mutate(deleteId)}
+            >
+              Desactivar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
