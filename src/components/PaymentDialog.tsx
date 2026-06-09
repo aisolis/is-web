@@ -5,6 +5,7 @@ import { CreditCard } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
+import { genInvoiceNumber, fmtCard, fmtExpiry, isValidCard, isValidExpiry, isValidCvv } from "@/lib/checkout-utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,10 +26,6 @@ type Props = {
   total: number;
 };
 
-function genInvoiceNumber() {
-  return `DTE-${String(Date.now()).slice(-6).padStart(6, "0")}`;
-}
-
 export function PaymentDialog({ open, onOpenChange, items, total }: Props) {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -42,22 +39,13 @@ export function PaymentDialog({ open, onOpenChange, items, total }: Props) {
   const [expiry, setExpiry] = useState("");
   const [cvv, setCvv] = useState("");
 
-  function fmtCard(v: string) {
-    return v.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim();
-  }
-
-  function fmtExpiry(v: string) {
-    const d = v.replace(/\D/g, "").slice(0, 4);
-    return d.length >= 3 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
-  }
-
   async function handlePay() {
     if (!nit.trim()) return toast.error("Ingresa tu NIT");
     if (!fiscalName.trim()) return toast.error("Ingresa tu nombre fiscal");
     if (!address.trim()) return toast.error("Ingresa una dirección de envío");
-    if (!/^\d{16}$/.test(cardNumber.replace(/\s/g, ""))) return toast.error("Número de tarjeta inválido (16 dígitos)");
-    if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(expiry)) return toast.error("Expiración inválida (MM/AA)");
-    if (!/^\d{3}$/.test(cvv)) return toast.error("CVV inválido (3 dígitos)");
+    if (!isValidCard(cardNumber)) return toast.error("Número de tarjeta inválido (16 dígitos)");
+    if (!isValidExpiry(expiry)) return toast.error("Expiración inválida (MM/AA)");
+    if (!isValidCvv(cvv)) return toast.error("CVV inválido (3 dígitos)");
 
     setPending(true);
     try {
