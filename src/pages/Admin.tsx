@@ -212,36 +212,71 @@ function OrdersAdmin() {
   );
 }
 
+const EMPTY_USER_FORM = { id: "", email: "", full_name: "", role: "user" as "admin" | "user" };
+const EMPTY_NEW_FORM  = { email: "", full_name: "", password: "", role: "user" as "admin" | "user" };
+
 function UsersAdmin() {
   const { user: currentUser } = useAuth();
   const qc = useQueryClient();
-  const [editOpen, setEditOpen] = useState(false);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [form, setForm] = useState({ id: "", email: "", full_name: "", role: "user" as "admin" | "user" });
 
-  const { data: profiles } = useQuery({
+  const [editOpen, setEditOpen]   = useState(false);
+  const [newOpen,  setNewOpen]    = useState(false);
+  const [deleteId, setDeleteId]   = useState<string | null>(null);
+  const [form,     setForm]       = useState(EMPTY_USER_FORM);
+  const [newForm,  setNewForm]    = useState(EMPTY_NEW_FORM);
+
+  // ── Queries ──────────────────────────────────────────────────────────────
+
+  const { data: profiles = [], isError: profilesError } = useQuery({
     queryKey: ["admin-profiles"],
-    queryFn: async () =>
-      (await supabase.from("profiles").select("id, email, full_name, is_active, created_at").eq("is_active", true).order("created_at", { ascending: false })).data ?? [],
+    queryFn: async () => {
+      // Try with new columns first; fall back to base columns if migration not yet applied
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, created_at, email, is_active")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        // Migration not applied yet — query only columns that definitely exist
+        const { data: fallback } = await supabase
+          .from("profiles")
+          .select("id, full_name, created_at")
+          .order("created_at", { ascending: false });
+        return (fallback ?? []).map((p) => ({ ...p, email: null, is_active: true }));
+      }
+
+      return (data ?? []).filter((p) => (p as { is_active: boolean | null }).is_active !== false);
+    },
   });
 
-  const { data: roles } = useQuery({
+  const { data: roles = [] } = useQuery({
     queryKey: ["admin-user-roles"],
     queryFn: async () => (await supabase.from("user_roles").select("user_id, role")).data ?? [],
   });
 
-  const users = profiles?.map((p) => ({
+  const users = profiles.map((p) => ({
     ...p,
-    role: (roles?.find((r) => r.user_id === p.id)?.role ?? "user") as "admin" | "user",
+    email:     (p as { email: string | null }).email ?? null,
+    is_active: (p as { is_active: boolean | null }).is_active ?? true,
+    role:      (roles.find((r) => r.user_id === p.id)?.role ?? "user") as "admin" | "user",
   }));
+
+  // ── Mutaciones ───────────────────────────────────────────────────────────
 
   const saveUser = useMutation({
     mutationFn: async () => {
-      const { error: pe } = await supabase.from("profiles").update({ full_name: form.full_name }).eq("id", form.id);
-      if (pe) throw pe;
+      const { error: pe } = await supabase
+        .from("profiles")
+        .update({ full_name: form.full_name })
+        .eq("id", form.id);
+      if (pe) throw new Error(pe.message);
+
+      // delete + insert to avoid needing a unique constraint on user_id
       await supabase.from("user_roles").delete().eq("user_id", form.id);
-      const { error: re } = await supabase.from("user_roles").insert({ user_id: form.id, role: form.role });
-      if (re) throw re;
+      const { error: re } = await supabase
+        .from("user_roles")
+        .insert({ user_id: form.id, role: form.role });
+      if (re) throw new Error(re.message);
     },
     onSuccess: () => {
       toast.success("Usuario actualizado");
@@ -252,10 +287,51 @@ function UsersAdmin() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const createUser = useMutation({
+    mutationFn: async () => {
+      if (!newForm.email.trim())    throw new Error("El email es requerido");
+      if (newForm.password.length < 6) throw new Error("La contraseña debe tener al menos 6 caracteres");
+
+      const { data, error } = await supabase.auth.signUp({
+        email: newForm.email.trim(),
+        password: newForm.password,
+        options: { data: { full_name: newForm.full_name } },
+      });
+      if (error) throw new Error(error.message);
+      if (!data.user) throw new Error("No se pudo crear el usuario");
+
+      // Update full_name in profile if provided
+      if (newForm.full_name.trim()) {
+        await supabase
+          .from("profiles")
+          .update({ full_name: newForm.full_name.trim() })
+          .eq("id", data.user.id);
+      }
+
+      // Assign role if admin
+      if (newForm.role === "admin") {
+        await supabase
+          .from("user_roles")
+          .insert({ user_id: data.user.id, role: "admin" });
+      }
+    },
+    onSuccess: () => {
+      toast.success("Usuario creado. Si el email requiere confirmación, el usuario debe verificar su correo.");
+      qc.invalidateQueries({ queryKey: ["admin-profiles"] });
+      qc.invalidateQueries({ queryKey: ["admin-user-roles"] });
+      setNewOpen(false);
+      setNewForm(EMPTY_NEW_FORM);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const deactivateUser = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("profiles").update({ is_active: false }).eq("id", id);
-      if (error) throw error;
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active: false })
+        .eq("id", id);
+      if (error) throw new Error(error.message);
     },
     onSuccess: () => {
       toast.success("Usuario desactivado");
@@ -265,8 +341,22 @@ function UsersAdmin() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
     <div>
+      {profilesError && (
+        <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+          Error al cargar usuarios. Asegúrate de haber ejecutado la migración SQL en Supabase.
+        </div>
+      )}
+
+      <div className="flex justify-end mb-4">
+        <Button onClick={() => { setNewForm(EMPTY_NEW_FORM); setNewOpen(true); }}>
+          <Plus className="h-4 w-4 mr-1" /> Nuevo usuario
+        </Button>
+      </div>
+
       <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-secondary/50 text-left">
@@ -279,7 +369,10 @@ function UsersAdmin() {
             </tr>
           </thead>
           <tbody>
-            {users?.map((u) => {
+            {users.length === 0 && (
+              <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No hay usuarios registrados.</td></tr>
+            )}
+            {users.map((u) => {
               const isSelf = u.id === currentUser?.id;
               return (
                 <tr key={u.id} className="border-t border-border">
@@ -294,6 +387,7 @@ function UsersAdmin() {
                   <td className="p-3 text-right space-x-1">
                     <Button
                       size="icon" variant="ghost"
+                      title={isSelf ? "No puedes editarte a ti mismo" : "Editar"}
                       disabled={isSelf}
                       onClick={() => { setForm({ id: u.id, email: u.email ?? "", full_name: u.full_name ?? "", role: u.role }); setEditOpen(true); }}
                     >
@@ -301,6 +395,7 @@ function UsersAdmin() {
                     </Button>
                     <Button
                       size="icon" variant="ghost" className="text-destructive"
+                      title={isSelf ? "No puedes desactivarte a ti mismo" : "Desactivar"}
                       disabled={isSelf}
                       onClick={() => setDeleteId(u.id)}
                     >
@@ -314,12 +409,71 @@ function UsersAdmin() {
         </table>
       </div>
 
+      {/* ── Nuevo usuario ── */}
+      <Dialog open={newOpen} onOpenChange={setNewOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Nuevo usuario</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Email *</Label>
+              <Input
+                type="email"
+                value={newForm.email}
+                onChange={(e) => setNewForm({ ...newForm, email: e.target.value })}
+                placeholder="usuario@ejemplo.com"
+              />
+            </div>
+            <div>
+              <Label>Nombre completo</Label>
+              <Input
+                value={newForm.full_name}
+                onChange={(e) => setNewForm({ ...newForm, full_name: e.target.value })}
+                placeholder="Juan López"
+              />
+            </div>
+            <div>
+              <Label>Contraseña *</Label>
+              <Input
+                type="password"
+                value={newForm.password}
+                onChange={(e) => setNewForm({ ...newForm, password: e.target.value })}
+                placeholder="Mínimo 6 caracteres"
+              />
+            </div>
+            <div>
+              <Label>Rol</Label>
+              <Select value={newForm.role} onValueChange={(v) => setNewForm({ ...newForm, role: v as "admin" | "user" })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">user</SelectItem>
+                  <SelectItem value="admin">admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button className="w-full" disabled={createUser.isPending} onClick={() => createUser.mutate()}>
+              {createUser.isPending ? "Creando…" : "Crear usuario"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Editar usuario ── */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Editar usuario</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div><Label>Email</Label><Input value={form.email} disabled className="opacity-60" /></div>
-            <div><Label>Nombre completo</Label><Input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></div>
+            <div>
+              <Label>Email</Label>
+              <Input value={form.email || "—"} disabled className="opacity-60" />
+            </div>
+            <div>
+              <Label>Nombre completo</Label>
+              <Input
+                value={form.full_name}
+                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                placeholder="Juan López"
+              />
+            </div>
             <div>
               <Label>Rol</Label>
               <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v as "admin" | "user" })}>
@@ -330,11 +484,14 @@ function UsersAdmin() {
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full" disabled={saveUser.isPending} onClick={() => saveUser.mutate()}>Guardar</Button>
+            <Button className="w-full" disabled={saveUser.isPending} onClick={() => saveUser.mutate()}>
+              {saveUser.isPending ? "Guardando…" : "Guardar cambios"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
 
+      {/* ── Confirmar desactivación ── */}
       <AlertDialog open={!!deleteId} onOpenChange={(o) => { if (!o) setDeleteId(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
