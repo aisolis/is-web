@@ -97,3 +97,42 @@ BEGIN
   RETURN v_order_id;
 END;
 $$;
+
+-- ─── RLS policies for admin user management ───────────────────────────────────
+-- Run these only if your tables have RLS enabled.
+-- They allow admins to read/update all profiles and manage user_roles.
+
+-- Admins can read all profiles (needed to list users in admin panel)
+DROP POLICY IF EXISTS "admins_read_all_profiles" ON public.profiles;
+CREATE POLICY "admins_read_all_profiles" ON public.profiles
+  FOR SELECT TO authenticated
+  USING (
+    auth.uid() = id OR
+    EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = auth.uid() AND role = 'admin')
+  );
+
+-- Admins can update any profile (needed to change full_name / is_active)
+DROP POLICY IF EXISTS "admins_update_any_profile" ON public.profiles;
+CREATE POLICY "admins_update_any_profile" ON public.profiles
+  FOR UPDATE TO authenticated
+  USING (
+    auth.uid() = id OR
+    EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = auth.uid() AND role = 'admin')
+  )
+  WITH CHECK (
+    auth.uid() = id OR
+    EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = auth.uid() AND role = 'admin')
+  );
+
+-- Admins can delete/insert/update user_roles for any user
+DROP POLICY IF EXISTS "admins_manage_user_roles" ON public.user_roles;
+CREATE POLICY "admins_manage_user_roles" ON public.user_roles
+  FOR ALL TO authenticated
+  USING (
+    user_id = auth.uid() OR
+    EXISTS (SELECT 1 FROM public.user_roles AS r WHERE r.user_id = auth.uid() AND r.role = 'admin')
+  )
+  WITH CHECK (
+    user_id = auth.uid() OR
+    EXISTS (SELECT 1 FROM public.user_roles AS r WHERE r.user_id = auth.uid() AND r.role = 'admin')
+  );
